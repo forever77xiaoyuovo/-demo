@@ -1,0 +1,263 @@
+// 固定画布和像素网格，缩放时仍保持像素风格。
+    const W = 800, H = 560, TILE = 40;
+    const MAP = { x: 24, y: 24, w: 752, h: 448 };
+    const BUILD = { x: 300, y: 170, w: 200, h: 160 };
+
+    class BuildScene extends Phaser.Scene {
+      create() {
+        this.hasAxe = false;
+        this.wood = 0;
+        this.stone = 0;
+        this.stage = 0; // 0: 未建墙，1: 已建墙，2: 已建屋顶
+        this.finished = false;
+        this.nearby = null;
+        this.noticeUntil = 0;
+
+        this.drawMap();
+        this.createBuildArea();
+        this.createResources();
+        this.createPlayer();
+        this.createHud();
+        this.cursors = this.input.keyboard.createCursorKeys();
+        this.keys = this.input.keyboard.addKeys("W,A,S,D");
+        this.input.keyboard.on("keydown-SPACE", () => this.useSpace());
+      }
+
+      drawMap() {
+        const g = this.add.graphics();
+        g.fillStyle(0x18201c).fillRect(0, 0, W, H);
+        g.fillStyle(0x88aa68).fillRect(MAP.x, MAP.y, MAP.w, MAP.h);
+        for (let y = MAP.y; y < MAP.y + MAP.h; y += TILE) {
+          for (let x = MAP.x; x < MAP.x + MAP.w; x += TILE) {
+            if ((x / TILE + y / TILE) % 2 === 0) g.fillStyle(0x82a363).fillRect(x, y, TILE, TILE);
+            g.fillStyle(0x719252).fillRect(x + 7, y + 31, 4, 3);
+            g.fillStyle(0xa2bd7a).fillRect(x + 27, y + 9, 3, 3);
+          }
+        }
+        g.lineStyle(4, 0x3d5240).strokeRect(MAP.x, MAP.y, MAP.w, MAP.h);
+        g.lineStyle(3, 0x9dbc78).lineBetween(MAP.x + 4, MAP.y + 4, MAP.x + MAP.w - 4, MAP.y + 4);
+      }
+
+      createBuildArea() {
+        const g = this.add.graphics();
+        g.fillStyle(0xd6c69b).fillRect(BUILD.x, BUILD.y, BUILD.w, BUILD.h);
+        g.lineStyle(5, 0x68462d).strokeRect(BUILD.x, BUILD.y, BUILD.w, BUILD.h);
+        g.lineStyle(2, 0x9b7049);
+        for (let x = BUILD.x + 20; x < BUILD.x + BUILD.w; x += 40) g.lineBetween(x, BUILD.y, x, BUILD.y + BUILD.h);
+        for (let y = BUILD.y + 20; y < BUILD.y + BUILD.h; y += 40) g.lineBetween(BUILD.x, y, BUILD.x + BUILD.w, y);
+        this.add.text(BUILD.x + BUILD.w / 2, BUILD.y + BUILD.h + 16, "建造区域", {
+          fontFamily: "monospace", fontSize: "16px", color: "#543a29"
+        }).setOrigin(0.5).setDepth(2);
+      }
+
+      createResources() {
+        this.resources = [];
+        [
+          ["tree", 120, 130], ["tree", 665, 110], ["tree", 145, 350],
+          ["tree", 650, 370], ["tree", 285, 90], ["tree", 550, 405],
+          ["stone", 220, 100], ["stone", 600, 260], ["stone", 190, 410],
+          ["stone", 700, 210], ["stone", 270, 400], ["stone", 570, 90]
+        ].forEach(([type, x, y]) => this.addResource(type, x, y));
+        this.axe = this.drawAxe(255, 390);
+      }
+
+      addResource(type, x, y) {
+        const art = type === "tree" ? this.drawTree(x, y) : this.drawStone(x, y);
+        const body = this.add.rectangle(x, y + 8, 34, 34, 0x000000, 0);
+        this.physics.add.existing(body, true);
+        this.resources.push({ type, x, y, art, body, active: true });
+      }
+
+      drawTree(x, y) {
+        const g = this.add.graphics().setDepth(2);
+        g.fillStyle(0x70452d).fillRect(x - 8, y + 4, 16, 31);
+        g.fillStyle(0x4b3325).fillRect(x - 3, y + 7, 5, 28);
+        g.fillStyle(0x477044).fillRect(x - 25, y - 20, 50, 30);
+        g.fillStyle(0x5f8b4b).fillRect(x - 17, y - 30, 34, 16);
+        g.fillStyle(0x7ea45c).fillRect(x - 8, y - 27, 12, 7);
+        g.fillStyle(0x365936).fillRect(x - 23, y - 8, 10, 9);
+        return g;
+      }
+
+      drawStone(x, y) {
+        const g = this.add.graphics().setDepth(2);
+        g.fillStyle(0x555b5d).fillRect(x - 23, y - 4, 46, 25);
+        g.fillStyle(0x3e4547).fillRect(x - 16, y - 13, 30, 9);
+        g.fillStyle(0x737a7c).fillRect(x - 10, y - 10, 11, 5);
+        g.fillStyle(0x9da3a2).fillRect(x - 13, y - 2, 6, 5);
+        g.fillStyle(0x424849).fillRect(x + 12, y + 9, 7, 5);
+        return g;
+      }
+
+      drawAxe(x, y) {
+        const g = this.add.graphics().setDepth(3);
+        g.fillStyle(0x6e482d).fillRect(x - 3, y - 22, 6, 43);
+        g.fillStyle(0xaeb5b3).fillRect(x + 2, y - 23, 22, 8);
+        g.fillStyle(0x858d8d).fillRect(x + 9, y - 15, 15, 6);
+        g.fillStyle(0x4a3327).fillRect(x - 9, y + 17, 17, 5);
+        const body = this.add.rectangle(x, y, 28, 38, 0x000000, 0);
+        this.physics.add.existing(body, true);
+        return { art: g, body };
+      }
+
+      createPlayer() {
+        this.playerArt = this.add.graphics().setDepth(5);
+        this.player = this.add.rectangle(130, 260, 24, 38, 0x000000, 0);
+        this.physics.add.existing(this.player);
+        this.player.body.setCollideWorldBounds(true);
+        this.player.body.setSize(24, 38);
+        this.drawPlayer();
+      }
+
+      drawPlayer() {
+        this.playerArt.clear();
+        this.playerArt.fillStyle(0xffffff).fillRect(this.player.x - 9, this.player.y - 18, 18, 18);
+        this.playerArt.fillStyle(0x0e1512);
+        this.playerArt.fillRect(this.player.x - 5, this.player.y - 12, 3, 3);
+        this.playerArt.fillRect(this.player.x + 2, this.player.y - 12, 3, 3);
+        this.playerArt.fillStyle(0xf4f4f4).fillRect(this.player.x - 12, this.player.y, 24, 24);
+      }
+
+      createHud() {
+        const panel = this.add.graphics().setDepth(10);
+        panel.fillStyle(0x17211d, 0.9).fillRoundedRect(18, 486, 764, 58, 8);
+        panel.lineStyle(3, 0x75906d).strokeRoundedRect(18, 486, 764, 58, 8);
+        this.bagText = this.add.text(36, 496, "", {
+          fontFamily: "monospace", fontSize: "16px", color: "#f2e8c9"
+        }).setDepth(11);
+        this.hintText = this.add.text(W / 2, 462, "探索地图，先找到斧头", {
+          fontFamily: "monospace", fontSize: "16px", color: "#fff8df",
+          backgroundColor: "#28352d", padding: { x: 9, y: 5 }
+        }).setOrigin(0.5).setDepth(11);
+        this.updateHud();
+      }
+
+      updateHud() {
+        this.bagText.setText("背包    " + (this.hasAxe ? "斧头：持有" : "斧头：未获得") +
+          "      木头：" + this.wood + "      石头：" + this.stone);
+      }
+
+      showNotice(text, color = "#fff8df") {
+        this.noticeUntil = this.time.now + 1200;
+        this.hintText.setText(text).setColor(color);
+      }
+
+      floatText(text, x, y, color = "#fff8df") {
+        const t = this.add.text(x, y, text, {
+          fontFamily: "monospace", fontSize: "18px", color,
+          stroke: "#263329", strokeThickness: 4
+        }).setOrigin(0.5).setDepth(12);
+        this.tweens.add({ targets: t, y: y - 22, alpha: 0, duration: 900, onComplete: () => t.destroy() });
+      }
+
+      inBuildArea() {
+        // BUILD 使用 w/h 保存尺寸，这里转换成 Phaser 需要的 width/height。
+        return Phaser.Geom.Rectangle.Contains(
+          { x: BUILD.x, y: BUILD.y, width: BUILD.w, height: BUILD.h },
+          this.player.x,
+          this.player.y
+        );
+      }
+
+      useSpace() {
+        if (this.finished) return;
+        if (this.nearby) {
+          if (!this.hasAxe) {
+            this.showNotice("需要斧头才能开采", "#ff8d7c");
+            return;
+          }
+          const r = this.nearby;
+          r.active = false; r.art.destroy(); r.body.destroy(); this.nearby = null;
+          if (r.type === "tree") {
+            this.wood++; this.floatText("+1 木头", r.x, r.y - 28, "#fff0a8");
+          } else {
+            this.stone++; this.floatText("+1 石头", r.x, r.y - 28, "#e1e8e5");
+          }
+          this.updateHud();
+          return;
+        }
+        if (!this.inBuildArea()) return;
+        if (this.stage === 0) {
+          if (this.wood < 2 || this.stone < 2) {
+            this.showNotice("材料不足", "#ff716d");
+            return;
+          }
+          this.wood -= 2; this.stone -= 2; this.stage = 1;
+          this.drawWalls();
+          this.floatText("墙体 +1", BUILD.x + BUILD.w / 2, BUILD.y - 12);
+        } else if (this.stage === 1) {
+          if (this.wood < 2 || this.stone < 1) {
+            this.showNotice("材料不足", "#ff716d");
+            return;
+          }
+          this.wood -= 2; this.stone--; this.stage = 2;
+          this.drawRoof();
+          this.floatText("屋顶 +1", BUILD.x + BUILD.w / 2, BUILD.y - 28);
+          this.finish();
+        }
+        this.updateHud();
+      }
+
+      drawWalls() {
+        const g = this.add.graphics().setDepth(4);
+        g.fillStyle(0x68422d).fillRect(BUILD.x + 16, BUILD.y + 16, BUILD.w - 32, BUILD.h - 30);
+        g.lineStyle(3, 0xb27a4d);
+        for (let y = BUILD.y + 42; y < BUILD.y + BUILD.h - 14; y += 28) g.lineBetween(BUILD.x + 16, y, BUILD.x + BUILD.w - 16, y);
+        for (let y = BUILD.y + 16; y < BUILD.y + BUILD.h - 14; y += 56) {
+          for (let x = BUILD.x + 45; x < BUILD.x + BUILD.w - 16; x += 56) g.lineBetween(x, y, x, y + 26);
+        }
+        g.fillStyle(0x4b3126).fillRect(BUILD.x + 16, BUILD.y + BUILD.h - 25, BUILD.w - 32, 9);
+      }
+
+      drawRoof() {
+        const g = this.add.graphics().setDepth(6);
+        g.fillStyle(0xb27b4e).fillTriangle(BUILD.x - 4, BUILD.y + 28, BUILD.x + BUILD.w / 2, BUILD.y - 32, BUILD.x + BUILD.w + 4, BUILD.y + 28);
+        g.lineStyle(7, 0x543525).lineBetween(BUILD.x - 5, BUILD.y + 28, BUILD.x + BUILD.w + 5, BUILD.y + 28);
+        g.lineStyle(3, 0xd19a63);
+        for (let i = 0; i < 5; i++) g.lineBetween(BUILD.x + 25 + i * 35, BUILD.y + 22, BUILD.x + 100, BUILD.y - 18 + i * 8);
+      }
+
+      finish() {
+        this.finished = true;
+        this.player.body.setVelocity(0, 0);
+        this.hintText.setText("小屋搭建完成！原型验证成功").setFontSize(22).setColor("#ffe8a6");
+        const frame = this.add.graphics().setDepth(13);
+        frame.lineStyle(5, 0xf1c75b).strokeRoundedRect(96, 188, 608, 96, 8);
+        this.tweens.add({ targets: frame, alpha: 0.25, duration: 420, yoyo: true, repeat: -1 });
+      }
+
+      update() {
+        if (this.finished) return;
+        const left = this.cursors.left.isDown || this.keys.A.isDown;
+        const right = this.cursors.right.isDown || this.keys.D.isDown;
+        const up = this.cursors.up.isDown || this.keys.W.isDown;
+        const down = this.cursors.down.isDown || this.keys.S.isDown;
+        const speed = 170;
+        this.player.body.setVelocity((right - left) * speed, (down - up) * speed);
+        this.drawPlayer();
+
+        if (!this.hasAxe && Phaser.Math.Distance.Between(this.player.x, this.player.y, this.axe.body.x, this.axe.body.y) < 28) {
+          this.hasAxe = true; this.axe.art.destroy(); this.axe.body.destroy();
+          this.showNotice("获得斧头"); this.updateHud();
+        }
+
+        this.nearby = null;
+        let nearest = 999;
+        this.resources.forEach(r => {
+          if (!r.active) return;
+          const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, r.x, r.y);
+          if (d < 52 && d < nearest) { nearest = d; this.nearby = r; }
+        });
+        if (this.nearby) this.showNotice("按空格采集");
+        else if (this.inBuildArea()) this.showNotice(this.stage === 0 ? "按空格建造墙体" : "按空格建造屋顶");
+        else if (this.time.now > this.noticeUntil) {
+          this.hintText.setText(this.hasAxe ? "靠近树木或岩石，按空格采集" : "探索地图，先找到斧头").setColor("#fff8df");
+        }
+      }
+    }
+
+    new Phaser.Game({
+      type: Phaser.AUTO, parent: "game", width: W, height: H,
+      backgroundColor: "#18201c", pixelArt: true, render: { antialias: false },
+      physics: { default: "arcade", arcade: { debug: false } }, scene: BuildScene
+    });
